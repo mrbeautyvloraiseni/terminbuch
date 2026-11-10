@@ -4375,7 +4375,7 @@ select,
 
 <div id="customAlert" class="alertOverlay">
 <div class="alertBox">
-<div class="alertTitle">Bereits reserviert</div>
+<div id="alertTitle" class="alertTitle">Bereits reserviert</div>
 <div id="alertMsg" class="alertText"></div>
 <button class="alertBtn" onclick="closeAlert()">OK</button>
 </div>
@@ -4915,11 +4915,12 @@ function showAppAfterLogin(){
     renderCalendar();
     window.mrbeautyReadyForRefresh=true;
     setInterval(renderCalendar,30000);
-    startCloudSync();
   }
+  startCloudSync();
 }
 
 function showLoginOnly(){
+  stopCloudSync();
   document.getElementById("loginLock").style.display="flex";
   document.querySelector(".top").style.display="none";
   document.querySelector(".content").style.display="none";
@@ -4973,41 +4974,73 @@ await termineCollection.doc(t._id).delete();
 }
 }
 
+let cloudUnsubscribe = null;
+let cloudRetryTimer = null;
+let cloudRetryCount = 0;
+let cloudSyncGeneration = 0;
+
+function stopCloudSync(){
+  cloudSyncGeneration++;
+  if(cloudRetryTimer){ clearTimeout(cloudRetryTimer); cloudRetryTimer=null; }
+  if(cloudUnsubscribe){ cloudUnsubscribe(); cloudUnsubscribe=null; }
+  cloudRetryCount=0;
+}
+
 function startCloudSync(){
-termineCollection.onSnapshot(async (snapshot)=>{
-try{
-if(cloudFirstSnapshot && snapshot.empty){
-let local=getList();
-if(local.length>0){
-for(let item of local){
-if(!item._id){
-let id=await cloudAddTermin(item);
-item._id=id;
-}
-}
-setList(local);
-cloudFirstSnapshot=false;
-return;
-}
-}
-cloudFirstSnapshot=false;
-let liste=[];
-snapshot.forEach((doc)=>{
-liste.push({_id:doc.id,...doc.data()});
-});
-liste.sort((a,b)=>{
-let d=(a.datum||"").localeCompare(b.datum||"");
-if(d!==0) return d;
-return (a.zeit||"").localeCompare(b.zeit||"");
-});
-setList(liste);
-renderCalendar();
-}catch(e){
-showAlert("Cloud Fehler beim Laden. Bitte Internet prüfen.");
-}
-},(error)=>{
-showAlert("Cloud Verbindung nicht möglich. Bitte Firebase Regeln/Testmodus prüfen.");
-});
+  if(!auth.currentUser || cloudUnsubscribe || cloudRetryTimer) return;
+  const generation=++cloudSyncGeneration;
+  // Do not start a second listener while an existing one is active.
+  cloudUnsubscribe=termineCollection.onSnapshot(async (snapshot)=>{
+    if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+    try{
+      if(cloudFirstSnapshot && snapshot.empty){
+        let local=getList();
+        if(local.length>0){
+          for(let item of local){
+            if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+            if(!item._id){
+              let id=await cloudAddTermin(item);
+              item._id=id;
+            }
+          }
+          if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+          setList(local);
+          cloudFirstSnapshot=false;
+          return;
+        }
+      }
+      cloudFirstSnapshot=false;
+      cloudRetryCount=0;
+      let liste=[];
+      snapshot.forEach((doc)=>{ liste.push({_id:doc.id,...doc.data()}); });
+      liste.sort((a,b)=>{
+        let d=(a.datum||"").localeCompare(b.datum||"");
+        if(d!==0) return d;
+        return (a.zeit||"").localeCompare(b.zeit||"");
+      });
+      if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+      setList(liste);
+      renderCalendar();
+    }catch(e){
+      console.error("Terminbuch Cloud Verarbeitung:",e);
+      showAlert("Termine konnten nicht verarbeitet werden. Bitte Verbindung prüfen.","Cloud-Fehler");
+    }
+  },(error)=>{
+    if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+    console.error("Terminbuch Firestore Listener:",error?.code,error);
+    if(cloudUnsubscribe){cloudUnsubscribe();cloudUnsubscribe=null;}
+    const code=error?.code || "unbekannt";
+    const msg=code==="permission-denied"
+      ? "Zugriff verweigert. Bitte mit info@mrbeauty.ch anmelden und Firebase-Berechtigungen prüfen."
+      : "Verbindung zu den Terminen unterbrochen. Die App versucht, sich erneut zu verbinden. Fehlercode: "+code;
+    showAlert(msg,"Cloud-Verbindung");
+    if(code==="permission-denied" || code==="unauthenticated") return;
+    const delay=Math.min(30000,2000*Math.pow(2,Math.min(cloudRetryCount++,4)));
+    cloudRetryTimer=setTimeout(()=>{
+      cloudRetryTimer=null;
+      if(generation===cloudSyncGeneration && auth.currentUser) startCloudSync();
+    },delay);
+  });
 }
 
 function pad(n){
@@ -5598,7 +5631,8 @@ function updatePreview(){
 }
 
 
-function showAlert(msg){
+function showAlert(msg, title="Bereits reserviert"){
+document.getElementById("alertTitle").innerText=title;
 document.getElementById("alertMsg").innerText=msg;
 document.getElementById("customAlert").style.display="flex";
 }
