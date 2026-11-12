@@ -5006,7 +5006,14 @@ renderCalendar();
 showAlert("Cloud Fehler beim Laden. Bitte Internet prüfen.");
 }
 },(error)=>{
-showAlert("Cloud Verbindung nicht möglich. Bitte Firebase Regeln/Testmodus prüfen.");
+console.error("Firestore Termin-Synchronisierung fehlgeschlagen:", error);
+const code = error && error.code ? String(error.code) : "unbekannt";
+const message = code === "permission-denied"
+  ? "Cloud-Zugriff verweigert (permission-denied). Bitte Anmeldung und Firebase-Berechtigungen prüfen."
+  : code === "unavailable"
+    ? "Cloud vorübergehend nicht erreichbar (unavailable). Bitte Verbindung prüfen und die Seite neu laden."
+    : "Cloud-Synchronisierung fehlgeschlagen (" + code + "). Bitte die Seite neu laden oder den Fehlercode melden.";
+showAlert(message, "Cloud-Synchronisierung");
 });
 }
 
@@ -5598,8 +5605,10 @@ function updatePreview(){
 }
 
 
-function showAlert(msg){
+function showAlert(msg, title){
 document.getElementById("alertMsg").innerText=msg;
+const titleEl=document.querySelector("#customAlert .alertTitle");
+if(titleEl) titleEl.innerText=title || "Hinweis";
 document.getElementById("customAlert").style.display="flex";
 }
 
