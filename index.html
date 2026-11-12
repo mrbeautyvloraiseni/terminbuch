@@ -4837,6 +4837,8 @@ const db = firebase.firestore();
 
 let rememberLogin = true;
 let appStarted = false;
+let cloudUnsubscribe = null;
+let cloudSyncGeneration = 0;
 
 function hideLoginError(){
   let e=document.getElementById("loginError");
@@ -4915,11 +4917,12 @@ function showAppAfterLogin(){
     renderCalendar();
     window.mrbeautyReadyForRefresh=true;
     setInterval(renderCalendar,30000);
-    startCloudSync();
   }
+  startCloudSync();
 }
 
 function showLoginOnly(){
+  stopCloudSync();
   document.getElementById("loginLock").style.display="flex";
   document.querySelector(".top").style.display="none";
   document.querySelector(".content").style.display="none";
@@ -4973,8 +4976,20 @@ await termineCollection.doc(t._id).delete();
 }
 }
 
+function stopCloudSync(){
+  cloudSyncGeneration++;
+  if(cloudUnsubscribe){
+    cloudUnsubscribe();
+    cloudUnsubscribe=null;
+  }
+}
+
 function startCloudSync(){
-termineCollection.onSnapshot(async (snapshot)=>{
+if(cloudUnsubscribe || !auth.currentUser) return;
+const generation=++cloudSyncGeneration;
+cloudFirstSnapshot=true;
+cloudUnsubscribe=termineCollection.onSnapshot(async (snapshot)=>{
+if(generation!==cloudSyncGeneration || !auth.currentUser) return;
 try{
 if(cloudFirstSnapshot && snapshot.empty){
 let local=getList();
@@ -4985,11 +5000,13 @@ let id=await cloudAddTermin(item);
 item._id=id;
 }
 }
+if(generation!==cloudSyncGeneration || !auth.currentUser) return;
 setList(local);
 cloudFirstSnapshot=false;
 return;
 }
 }
+if(generation!==cloudSyncGeneration || !auth.currentUser) return;
 cloudFirstSnapshot=false;
 let liste=[];
 snapshot.forEach((doc)=>{
@@ -5003,9 +5020,11 @@ return (a.zeit||"").localeCompare(b.zeit||"");
 setList(liste);
 renderCalendar();
 }catch(e){
-showAlert("Cloud Fehler beim Laden. Bitte Internet prüfen.");
+if(generation===cloudSyncGeneration && auth.currentUser) showAlert("Cloud Fehler beim Laden. Bitte Internet prüfen.");
 }
 },(error)=>{
+if(generation!==cloudSyncGeneration || !auth.currentUser) return;
+cloudUnsubscribe=null;
 console.error("Firestore Termin-Synchronisierung fehlgeschlagen:", error);
 const code = error && error.code ? String(error.code) : "unbekannt";
 const message = code === "permission-denied"
